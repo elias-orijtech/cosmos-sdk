@@ -1,0 +1,20 @@
+name: "Warn on state changes"
+
+on:
+  pull_request_target:
+    types:
+      - opened
+      - edited
+      - synchronize
+
+permissions:
+  contents: read
+
+jobs:
+  main:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - run: |
+          curl -sL -H "Authorization: Bearer ${{ github.token }}" -H "Accept: application/vnd.github.v3.diff" \
+          "${{ github.server_url }}/${{ github.repository }}/pull/${{ github.event.pull_request.number }}.patch" | ./.github/workflows/statediff.sh
