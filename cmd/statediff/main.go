@@ -7,6 +7,7 @@ import (
 	"go/types"
 	"io"
 	"os"
+	"strings"
 
 	"github.com/sourcegraph/go-diff/diff"
 	"golang.org/x/tools/go/packages"
@@ -14,7 +15,7 @@ import (
 
 func main() {
 	if err := run(); err != nil {
-		fmt.Fprintf(os.Stderr, "statediff: failed to load packages: %v", err)
+		fmt.Fprintf(os.Stderr, "statediff: %v\n", err)
 		os.Exit(1)
 	}
 }
@@ -42,7 +43,6 @@ func run() error {
 			fmt.Printf("hunk body: %s\n", hunk.Body)
 		}
 	}
-	os.Exit(1)
 	state := &analyzerState{
 		funcs: make(map[*types.Func]bodyInfo),
 	}
@@ -64,7 +64,8 @@ func run() error {
 					td := pkg.TypesInfo.Defs[decl.Name].(*types.Func)
 					inf := bodyInfo{decl.Body, pkg.TypesInfo}
 					state.funcs[td] = inf
-					if rootNames[td.FullName()] {
+					if fn := td.FullName(); rootNames[fn] {
+						delete(rootNames, fn)
 						roots = append(roots, td)
 					}
 				}
@@ -76,6 +77,13 @@ func run() error {
 	}
 	for _, pkg := range pkgs {
 		addPkg(pkg)
+	}
+	var missing []string
+	for n := range rootNames {
+		missing = append(missing, n)
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("missing roots: %v", strings.Join(missing, ","))
 	}
 	for _, root := range roots {
 		inspect(state, root)
@@ -110,7 +118,6 @@ func inspect(state *analyzerState, def *types.Func) {
 			}
 			switch t := inf.info.Uses[id].(type) {
 			case *types.Func:
-				fmt.Println(t.FullName())
 				inspect(state, t)
 			}
 		}
