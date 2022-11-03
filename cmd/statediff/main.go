@@ -25,12 +25,13 @@ func run() error {
 		return err
 	}
 	state := &analyzerState{
-		stateFuncs: map[string]bool{
-			"(*github.com/cosmos/cosmos-sdk/baseapp.BaseApp).DeliverTx": true,
-		},
-		funcs: make(map[string]pkgFunc),
+		funcs: make(map[*types.Func]bodyInfo),
 	}
 	imported := make(map[*packages.Package]bool)
+	rootNames := map[string]bool{
+		"(*github.com/cosmos/cosmos-sdk/baseapp.BaseApp).DeliverTx": true,
+	}
+	var roots []*types.Func
 	var addPkg func(pkg *packages.Package)
 	addPkg = func(pkg *packages.Package) {
 		if imported[pkg] {
@@ -43,7 +44,11 @@ func run() error {
 				switch decl := decl.(type) {
 				case *ast.FuncDecl:
 					td := pkg.TypesInfo.Defs[decl.Name].(*types.Func)
-					state.funcs[td.FullName()] = pkgFunc{pkg, decl}
+					inf := bodyInfo{decl.Body, pkg.TypesInfo}
+					state.funcs[td] = inf
+					if rootNames[td.FullName()] {
+						roots = append(roots, td)
+					}
 				}
 			}
 		}
@@ -54,28 +59,28 @@ func run() error {
 	for _, pkg := range pkgs {
 		addPkg(pkg)
 	}
-	for name := range state.stateFuncs {
-		decl, ok := state.funcs[name]
-		if !ok {
-			return fmt.Errorf("statediff: state function %s not found", name)
-		}
-		inspect(state, decl.pkg, decl.fun.Body)
+	for _, root := range roots {
+		inspect(state, root)
 	}
 	return nil
 }
 
-type pkgFunc struct {
-	pkg *packages.Package
-	fun *ast.FuncDecl
+type bodyInfo struct {
+	body *ast.BlockStmt
+	info *types.Info
 }
 
 type analyzerState struct {
-	stateFuncs map[string]bool
-	funcs      map[string]pkgFunc
+	funcs map[*types.Func]bodyInfo
 }
 
-func inspect(state *analyzerState, pkg *packages.Package, body *ast.BlockStmt) {
-	ast.Inspect(body, func(n ast.Node) bool {
+func inspect(state *analyzerState, def *types.Func) {
+	inf, ok := state.funcs[def]
+	if !ok || inf.body == nil {
+		return
+	}
+	delete(state.funcs, def)
+	ast.Inspect(inf.body, func(n ast.Node) bool {
 		switch n := n.(type) {
 		case *ast.CallExpr:
 			var id *ast.Ident
@@ -85,9 +90,10 @@ func inspect(state *analyzerState, pkg *packages.Package, body *ast.BlockStmt) {
 			case *ast.SelectorExpr:
 				id = fun.Sel
 			}
-			switch t := pkg.TypesInfo.Uses[id].(type) {
+			switch t := inf.info.Uses[id].(type) {
 			case *types.Func:
 				fmt.Printf("uses type %T, id %v: %v full name %s\n", t, t.Id(), n, t.FullName())
+				inspect(state, t)
 			}
 		}
 		return true
