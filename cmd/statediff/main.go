@@ -18,6 +18,13 @@ import (
 )
 
 var dir = flag.String("dir", ".", "base directory for the patch")
+var rootNames = stringSet{
+	"(*github.com/cosmos/cosmos-sdk/baseapp.BaseApp).DeliverTx": true,
+}
+
+func init() {
+	flag.Var(rootNames, "roots", "comma-separated list of root functions")
+}
 
 func main() {
 	flag.Parse()
@@ -47,9 +54,6 @@ func run() error {
 		funcs: make(map[*types.Func]BodyInfo),
 	}
 	imported := make(map[*packages.Package]bool)
-	rootNames := map[string]bool{
-		"(*github.com/cosmos/cosmos-sdk/baseapp.BaseApp).DeliverTx": true,
-	}
 	var roots []*types.Func
 	var addPkg func(pkg *packages.Package)
 	addPkg = func(pkg *packages.Package) {
@@ -177,6 +181,11 @@ func inspect(state *analyzerState, patch Patch, def *types.Func) {
 		return
 	}
 	delete(state.funcs, def)
+	start := state.fset.PositionFor(inf.body.Pos(), false)
+	end := state.fset.PositionFor(inf.body.End(), false)
+	if start.IsValid() && end.IsValid() && patch.Edits(start.Filename, start.Line, end.Line) {
+		fmt.Println("edit!", start, end)
+	}
 	ast.Inspect(inf.body, func(n ast.Node) bool {
 		switch n := n.(type) {
 		case *ast.CallExpr:
@@ -189,14 +198,30 @@ func inspect(state *analyzerState, patch Patch, def *types.Func) {
 			}
 			switch t := inf.info.Uses[id].(type) {
 			case *types.Func:
-				start := state.fset.PositionFor(id.Pos(), false)
-				end := state.fset.PositionFor(id.End(), false)
-				if start.IsValid() && end.IsValid() && patch.Edits(start.Filename, start.Line, end.Line) {
-					fmt.Println("edit!", start, end)
-				}
 				inspect(state, patch, t)
 			}
 		}
 		return true
 	})
+}
+
+type stringSet map[string]bool
+
+func (ss stringSet) String() string {
+	var list []string
+	for name := range ss {
+		list = append(list, name)
+	}
+	sort.Strings(list)
+	return strings.Join(list, ",")
+}
+
+func (ss stringSet) Set(flag string) error {
+	for _, name := range strings.Split(flag, ",") {
+		if len(name) == 0 {
+			return errors.New("empty string")
+		}
+		ss[name] = true
+	}
+	return nil
 }
