@@ -24,27 +24,16 @@ func run() error {
 	cfg := &packages.Config{
 		Mode: packages.NeedImports | packages.NeedSyntax | packages.NeedDeps | packages.NeedName | packages.NeedTypes | packages.NeedTypesInfo,
 	}
-	diffs := diff.NewMultiFileDiffReader(os.Stdin)
 	pkgs, err := packages.Load(cfg, "github.com/cosmos/cosmos-sdk/baseapp")
 	if err != nil {
 		return err
 	}
-	for {
-		d, err := diffs.ReadFile()
-		if err != nil {
-			if errors.Is(err, io.EOF) {
-				break
-			}
-			return fmt.Errorf("failed to read diff: %v", err)
-		}
-		fmt.Printf("diff: %+v\n", d)
-		for _, hunk := range d.Hunks {
-			fmt.Printf("hunk: %+v\n", hunk)
-			fmt.Printf("hunk body: %s\n", hunk.Body)
-		}
+	_, err = parsePatch(os.Stdin)
+	if err != nil {
+		return err
 	}
 	state := &analyzerState{
-		funcs: make(map[*types.Func]bodyInfo),
+		funcs: make(map[*types.Func]BodyInfo),
 	}
 	imported := make(map[*packages.Package]bool)
 	rootNames := map[string]bool{
@@ -62,7 +51,7 @@ func run() error {
 				switch decl := decl.(type) {
 				case *ast.FuncDecl:
 					td := pkg.TypesInfo.Defs[decl.Name].(*types.Func)
-					inf := bodyInfo{decl.Body, pkg.TypesInfo}
+					inf := BodyInfo{decl.Body, pkg.TypesInfo}
 					state.funcs[td] = inf
 					if fn := td.FullName(); rootNames[fn] {
 						delete(rootNames, fn)
@@ -91,13 +80,40 @@ func run() error {
 	return nil
 }
 
-type bodyInfo struct {
+func parsePatch(r io.Reader) (Patch, error) {
+	diffs := diff.NewMultiFileDiffReader(os.Stdin)
+	for {
+		d, err := diffs.ReadFile()
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			return Patch{}, fmt.Errorf("failed to read diff: %v", err)
+		}
+		fmt.Printf("diff: %+v\n", d)
+		for _, hunk := range d.Hunks {
+			fmt.Printf("hunk: %+v\n", hunk)
+			fmt.Printf("hunk body: %s\n", hunk.Body)
+		}
+	}
+	return Patch{}, nil
+}
+
+type Patch []Diff
+
+type Diff struct {
+	path      string
+	startLine int
+	lines     int
+}
+
+type BodyInfo struct {
 	body *ast.BlockStmt
 	info *types.Info
 }
 
 type analyzerState struct {
-	funcs map[*types.Func]bodyInfo
+	funcs map[*types.Func]BodyInfo
 }
 
 func inspect(state *analyzerState, def *types.Func) {
