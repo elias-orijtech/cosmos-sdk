@@ -38,7 +38,6 @@ func run() error {
 			return
 		}
 		imported[pkg] = true
-		fmt.Println(pkg.Name)
 		for _, f := range pkg.Syntax {
 			for _, decl := range f.Decls {
 				switch decl := decl.(type) {
@@ -92,7 +91,7 @@ func inspect(state *analyzerState, def *types.Func) {
 			}
 			switch t := inf.info.Uses[id].(type) {
 			case *types.Func:
-				fmt.Printf("uses type %T, id %v: %v full name %s\n", t, t.Id(), n, t.FullName())
+				fmt.Println(t.FullName())
 				inspect(state, t)
 			}
 		}
