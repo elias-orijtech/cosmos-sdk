@@ -7,6 +7,7 @@ import (
 	"go/types"
 	"io"
 	"os"
+	"sort"
 	"strings"
 
 	"github.com/sourcegraph/go-diff/diff"
@@ -82,6 +83,7 @@ func run() error {
 
 func parsePatch(r io.Reader) (Patch, error) {
 	diffs := diff.NewMultiFileDiffReader(os.Stdin)
+	var p Patch
 	for {
 		d, err := diffs.ReadFile()
 		if err != nil {
@@ -92,19 +94,64 @@ func parsePatch(r io.Reader) (Patch, error) {
 		}
 		fmt.Printf("diff: %+v\n", d)
 		for _, hunk := range d.Hunks {
+			startLine := int(hunk.OrigStartLine)
+			p = append(p, Hunk{
+				file:      d.OrigName,
+				startLine: startLine,
+				endLine:   startLine + int(hunk.OrigLines),
+			})
 			fmt.Printf("hunk: %+v\n", hunk)
 			fmt.Printf("hunk body: %s\n", hunk.Body)
 		}
 	}
-	return Patch{}, nil
+	sort.Slice(p, func(i, j int) bool {
+		h1, h2 := p[i], p[j]
+		switch strings.Compare(h1.file, h2.file) {
+		case -1:
+			return true
+		case +1:
+			return false
+		default:
+			return h1.startLine <= h2.startLine
+		}
+	})
+	return p, nil
 }
 
-type Patch []Diff
+// Patch is a slice of Hunks, sorted by path then starting line to
+// make Edits efficient.
+type Patch []Hunk
 
-type Diff struct {
-	path      string
+type Hunk struct {
+	file      string
 	startLine int
-	lines     int
+	endLine   int
+}
+
+// Edits reports whether the patch edits the file in the line range
+// specified. The range is inclusive.
+func (p Patch) Edits(file string, startLine, endLine int) bool {
+	idx := sort.Search(len(p), func(i int) bool {
+		h := p[i]
+		switch strings.Compare(file, h.file) {
+		case -1:
+			return true
+		case +1:
+			return false
+		default:
+			return startLine <= h.endLine
+		}
+	})
+	for i := idx; i < len(p); i++ {
+		h := p[i]
+		if h.file != file {
+			return false
+		}
+		if h.startLine <= endLine {
+			return true
+		}
+	}
+	return false
 }
 
 type BodyInfo struct {
