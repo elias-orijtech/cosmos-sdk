@@ -1,11 +1,14 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"go/ast"
 	"go/types"
+	"io"
 	"os"
 
+	"github.com/sourcegraph/go-diff/diff"
 	"golang.org/x/tools/go/packages"
 )
 
@@ -20,10 +23,26 @@ func run() error {
 	cfg := &packages.Config{
 		Mode: packages.NeedImports | packages.NeedSyntax | packages.NeedDeps | packages.NeedName | packages.NeedTypes | packages.NeedTypesInfo,
 	}
+	diffs := diff.NewMultiFileDiffReader(os.Stdin)
 	pkgs, err := packages.Load(cfg, "github.com/cosmos/cosmos-sdk/baseapp")
 	if err != nil {
 		return err
 	}
+	for {
+		d, err := diffs.ReadFile()
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			return fmt.Errorf("failed to read diff: %v", err)
+		}
+		fmt.Printf("diff: %+v\n", d)
+		for _, hunk := range d.Hunks {
+			fmt.Printf("hunk: %+v\n", hunk)
+			fmt.Printf("hunk body: %s\n", hunk.Body)
+		}
+	}
+	os.Exit(1)
 	state := &analyzerState{
 		funcs: make(map[*types.Func]bodyInfo),
 	}
