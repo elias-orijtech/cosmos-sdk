@@ -18,7 +18,7 @@ func main() {
 
 func run() error {
 	cfg := &packages.Config{
-		Mode: packages.NeedImports | packages.NeedSyntax | packages.NeedDeps | packages.NeedName | packages.NeedTypesInfo | packages.NeedTypes,
+		Mode: packages.NeedImports | packages.NeedSyntax | packages.NeedDeps | packages.NeedName | packages.NeedTypes | packages.NeedTypesInfo,
 	}
 	pkgs, err := packages.Load(cfg, "github.com/cosmos/cosmos-sdk/baseapp")
 	if err != nil {
@@ -59,7 +59,7 @@ func run() error {
 		if !ok {
 			return fmt.Errorf("statediff: state function %s not found", name)
 		}
-		inspect(state, decl)
+		inspect(state, decl.pkg, decl.fun.Body)
 	}
 	return nil
 }
@@ -74,8 +74,8 @@ type analyzerState struct {
 	funcs      map[string]pkgFunc
 }
 
-func inspect(state *analyzerState, decl pkgFunc) {
-	ast.Inspect(decl.fun.Body, func(n ast.Node) bool {
+func inspect(state *analyzerState, pkg *packages.Package, body *ast.BlockStmt) {
+	ast.Inspect(body, func(n ast.Node) bool {
 		switch n := n.(type) {
 		case *ast.CallExpr:
 			var id *ast.Ident
@@ -85,7 +85,7 @@ func inspect(state *analyzerState, decl pkgFunc) {
 			case *ast.SelectorExpr:
 				id = fun.Sel
 			}
-			switch t := decl.pkg.TypesInfo.Uses[id].(type) {
+			switch t := pkg.TypesInfo.Uses[id].(type) {
 			case *types.Func:
 				fmt.Printf("uses type %T, id %v: %v full name %s\n", t, t.Id(), n, t.FullName())
 			}
