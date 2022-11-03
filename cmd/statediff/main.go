@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"go/ast"
+	"go/token"
 	"go/types"
 	"io"
 	"os"
@@ -22,18 +23,21 @@ func main() {
 }
 
 func run() error {
+	fset := new(token.FileSet)
 	cfg := &packages.Config{
+		Fset: fset,
 		Mode: packages.NeedImports | packages.NeedSyntax | packages.NeedDeps | packages.NeedName | packages.NeedTypes | packages.NeedTypesInfo,
 	}
 	pkgs, err := packages.Load(cfg, "github.com/cosmos/cosmos-sdk/baseapp")
 	if err != nil {
 		return err
 	}
-	_, err = parsePatch(os.Stdin)
+	patch, err := parsePatch(os.Stdin)
 	if err != nil {
 		return err
 	}
 	state := &analyzerState{
+		fset:  fset,
 		funcs: make(map[*types.Func]BodyInfo),
 	}
 	imported := make(map[*packages.Package]bool)
@@ -76,7 +80,7 @@ func run() error {
 		return fmt.Errorf("missing roots: %v", strings.Join(missing, ","))
 	}
 	for _, root := range roots {
-		inspect(state, root)
+		inspect(state, patch, root)
 	}
 	return nil
 }
@@ -92,7 +96,6 @@ func parsePatch(r io.Reader) (Patch, error) {
 			}
 			return Patch{}, fmt.Errorf("failed to read diff: %v", err)
 		}
-		fmt.Printf("diff: %+v\n", d)
 		for _, hunk := range d.Hunks {
 			startLine := int(hunk.OrigStartLine)
 			p = append(p, Hunk{
@@ -100,8 +103,6 @@ func parsePatch(r io.Reader) (Patch, error) {
 				startLine: startLine,
 				endLine:   startLine + int(hunk.OrigLines),
 			})
-			fmt.Printf("hunk: %+v\n", hunk)
-			fmt.Printf("hunk body: %s\n", hunk.Body)
 		}
 	}
 	sort.Slice(p, func(i, j int) bool {
@@ -160,10 +161,11 @@ type BodyInfo struct {
 }
 
 type analyzerState struct {
+	fset  *token.FileSet
 	funcs map[*types.Func]BodyInfo
 }
 
-func inspect(state *analyzerState, def *types.Func) {
+func inspect(state *analyzerState, patch Patch, def *types.Func) {
 	inf, ok := state.funcs[def]
 	if !ok || inf.body == nil {
 		return
@@ -181,7 +183,13 @@ func inspect(state *analyzerState, def *types.Func) {
 			}
 			switch t := inf.info.Uses[id].(type) {
 			case *types.Func:
-				inspect(state, t)
+				file := state.fset.File(id.Pos())
+				start := state.fset.PositionFor(id.Pos(), false)
+				end := state.fset.PositionFor(id.End(), false)
+				if start.IsValid() && end.IsValid() && patch.Edits(start.Filename, start.Line, end.Line) {
+					fmt.Println("edit!", file, start, end)
+				}
+				inspect(state, patch, t)
 			}
 		}
 		return true
