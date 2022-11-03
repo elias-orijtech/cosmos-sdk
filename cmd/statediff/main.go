@@ -189,11 +189,10 @@ func inspect(state *analyzerState, patch Patch, def *types.Func) {
 			}
 			switch t := inf.info.Uses[id].(type) {
 			case *types.Func:
-				file := state.fset.File(id.Pos())
 				start := state.fset.PositionFor(id.Pos(), false)
 				end := state.fset.PositionFor(id.End(), false)
 				if start.IsValid() && end.IsValid() && patch.Edits(start.Filename, start.Line, end.Line) {
-					fmt.Println("edit!", file, start, end)
+					fmt.Println("edit!", start, end)
 				}
 				inspect(state, patch, t)
 			}
