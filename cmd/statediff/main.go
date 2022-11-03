@@ -2,12 +2,14 @@ package main
 
 import (
 	"errors"
+	"flag"
 	"fmt"
 	"go/ast"
 	"go/token"
 	"go/types"
 	"io"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -15,7 +17,11 @@ import (
 	"golang.org/x/tools/go/packages"
 )
 
+var dir = flag.String("dir", ".", "base directory for the patch")
+
 func main() {
+	flag.Parse()
+	*dir, _ = filepath.Abs(*dir)
 	if err := run(); err != nil {
 		fmt.Fprintf(os.Stderr, "statediff: %v\n", err)
 		os.Exit(1)
@@ -99,7 +105,7 @@ func parsePatch(r io.Reader) (Patch, error) {
 		for _, hunk := range d.Hunks {
 			startLine := int(hunk.OrigStartLine)
 			p = append(p, Hunk{
-				file:      d.OrigName,
+				file:      filepath.Join(*dir, d.OrigName),
 				startLine: startLine,
 				endLine:   startLine + int(hunk.OrigLines),
 			})
