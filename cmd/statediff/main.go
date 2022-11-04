@@ -18,12 +18,12 @@ import (
 )
 
 var dir = flag.String("dir", ".", "base directory for the patch")
-var rootNames = stringSet{
-	"(*github.com/cosmos/cosmos-sdk/baseapp.BaseApp).DeliverTx": true,
+var rootNames = stringSlice{
+	"github.com/cosmos/cosmos-sdk/baseapp.BaseApp.DeliverTx",
 }
 
 func init() {
-	flag.Var(rootNames, "roots", "comma-separated list of root functions")
+	flag.Var(&rootNames, "roots", "comma-separated list of root functions")
 }
 
 func main() {
@@ -35,13 +35,43 @@ func main() {
 	}
 }
 
+// rootFunction is a representation of a method such as
+//
+//   example.com/pkg/path.Type.Method
+//
+// or a function such as
+//
+//   example.com/pkg/path.Function
+type rootFunction struct {
+	typ string
+	fun string
+}
+
 func run() error {
 	fset := new(token.FileSet)
 	cfg := &packages.Config{
 		Fset: fset,
 		Mode: packages.NeedImports | packages.NeedSyntax | packages.NeedDeps | packages.NeedName | packages.NeedTypes | packages.NeedTypesInfo,
 	}
-	pkgs, err := packages.Load(cfg, "github.com/cosmos/cosmos-sdk/baseapp")
+	var pkgNames []string
+	rootFuncs := make(map[rootFunction]bool)
+	for _, root := range rootNames {
+		var f rootFunction
+		lastSlash := strings.LastIndex(root, "/")
+		idx := strings.LastIndex(root, ".")
+		if idx <= lastSlash {
+			return fmt.Errorf("malformed function or method: %s", root)
+		}
+		f.fun = root[idx+1:]
+		root = root[:idx]
+		f.typ = root
+		if idx := strings.LastIndex(root, "."); idx > lastSlash {
+			root = root[:idx]
+		}
+		pkgNames = append(pkgNames, root)
+		rootFuncs[f] = true
+	}
+	pkgs, err := packages.Load(cfg, pkgNames...)
 	if err != nil {
 		return err
 	}
@@ -66,10 +96,20 @@ func run() error {
 				switch decl := decl.(type) {
 				case *ast.FuncDecl:
 					td := pkg.TypesInfo.Defs[decl.Name].(*types.Func)
-					inf := BodyInfo{decl.Body, pkg.TypesInfo}
+					inf := BodyInfo{decl, pkg.TypesInfo}
 					state.funcs[td] = inf
-					if fn := td.FullName(); rootNames[fn] {
-						delete(rootNames, fn)
+					rf := rootFunction{fun: td.Name()}
+					if recv := td.Type().(*types.Signature).Recv(); recv != nil {
+						t := recv.Type()
+						if pt, isPointer := t.(*types.Pointer); isPointer {
+							t = pt.Elem()
+						}
+						rf.typ = types.TypeString(t, nil)
+					} else {
+						rf.typ = pkg.PkgPath
+					}
+					if rootFuncs[rf] {
+						delete(rootFuncs, rf)
 						roots = append(roots, td)
 					}
 				}
@@ -83,14 +123,25 @@ func run() error {
 		addPkg(pkg)
 	}
 	var missing []string
-	for n := range rootNames {
-		missing = append(missing, n)
+	for n := range rootFuncs {
+		missing = append(missing, n.typ+"."+n.fun)
 	}
 	if len(missing) > 0 {
 		return fmt.Errorf("missing roots: %v", strings.Join(missing, ","))
 	}
 	for _, root := range roots {
-		inspect(state, patch, root)
+		inspect(state, patch, root, nil)
+	}
+	for _, hunk := range patch {
+		if len(hunk.stack) > 0 {
+			fmt.Println("Patch hunk is potentially state sensitive:")
+			fmt.Printf("\n%s\n\n", hunk.hunk.Body)
+			fmt.Println("Callstack:")
+			for _, e := range hunk.stack {
+				pos := fset.Position(e.pos)
+				fmt.Printf("%s (%s:%d)\n", e.fun.FullName(), pos.Filename, pos.Line)
+			}
+		}
 	}
 	return nil
 }
@@ -109,6 +160,7 @@ func parsePatch(r io.Reader) (Patch, error) {
 		for _, hunk := range d.Hunks {
 			startLine := int(hunk.OrigStartLine)
 			p = append(p, Hunk{
+				hunk:      hunk,
 				file:      filepath.Join(*dir, d.OrigName),
 				startLine: startLine,
 				endLine:   startLine + int(hunk.OrigLines),
@@ -129,19 +181,25 @@ func parsePatch(r io.Reader) (Patch, error) {
 	return p, nil
 }
 
-// Patch is a slice of Hunks, sorted by path then starting line to
-// make Edits efficient.
+// Patch is a slice of Hunks, sorted by path then starting line.
 type Patch []Hunk
 
 type Hunk struct {
 	file      string
 	startLine int
 	endLine   int
+	hunk      *diff.Hunk
+	stack     []stackEntry
 }
 
-// Edits reports whether the patch edits the file in the line range
-// specified. The range is inclusive.
-func (p Patch) Edits(file string, startLine, endLine int) bool {
+type stackEntry struct {
+	fun *types.Func
+	pos token.Pos
+}
+
+// Mark any hunk that overlaps the specified range of lines in file. The stack argument
+// is used when printing out clashes.
+func (p Patch) Mark(stack []stackEntry, file string, startLine, endLine int) {
 	idx := sort.Search(len(p), func(i int) bool {
 		h := p[i]
 		switch strings.Compare(file, h.file) {
@@ -155,18 +213,18 @@ func (p Patch) Edits(file string, startLine, endLine int) bool {
 	})
 	for i := idx; i < len(p); i++ {
 		h := p[i]
-		if h.file != file {
-			return false
+		if h.file != file || h.startLine > endLine {
+			break
 		}
-		if h.startLine <= endLine {
-			return true
+		// Record the stack, but only if it is shorter than any previous stack.
+		if len(p[i].stack) == 0 || len(p[i].stack) > len(stack) {
+			p[i].stack = append(p[i].stack[0:], stack...)
 		}
 	}
-	return false
 }
 
 type BodyInfo struct {
-	body *ast.BlockStmt
+	fun  *ast.FuncDecl
 	info *types.Info
 }
 
@@ -175,18 +233,19 @@ type analyzerState struct {
 	funcs map[*types.Func]BodyInfo
 }
 
-func inspect(state *analyzerState, patch Patch, def *types.Func) {
+func inspect(state *analyzerState, patch Patch, def *types.Func, stack []stackEntry) {
 	inf, ok := state.funcs[def]
-	if !ok || inf.body == nil {
+	if !ok || inf.fun.Body == nil {
 		return
 	}
 	delete(state.funcs, def)
-	start := state.fset.PositionFor(inf.body.Pos(), false)
-	end := state.fset.PositionFor(inf.body.End(), false)
-	if start.IsValid() && end.IsValid() && patch.Edits(start.Filename, start.Line, end.Line) {
-		fmt.Println("edit!", start, end)
+	stack = append(stack, stackEntry{fun: def, pos: inf.fun.Pos()})
+	start := state.fset.PositionFor(inf.fun.Body.Pos(), false)
+	end := state.fset.PositionFor(inf.fun.Body.End(), false)
+	if start.IsValid() && end.IsValid() {
+		patch.Mark(stack, start.Filename, start.Line, end.Line)
 	}
-	ast.Inspect(inf.body, func(n ast.Node) bool {
+	ast.Inspect(inf.fun.Body, func(n ast.Node) bool {
 		switch n := n.(type) {
 		case *ast.CallExpr:
 			var id *ast.Ident
@@ -198,30 +257,25 @@ func inspect(state *analyzerState, patch Patch, def *types.Func) {
 			}
 			switch t := inf.info.Uses[id].(type) {
 			case *types.Func:
-				inspect(state, patch, t)
+				inspect(state, patch, t, stack)
 			}
 		}
 		return true
 	})
 }
 
-type stringSet map[string]bool
+type stringSlice []string
 
-func (ss stringSet) String() string {
-	var list []string
-	for name := range ss {
-		list = append(list, name)
-	}
-	sort.Strings(list)
-	return strings.Join(list, ",")
+func (ss *stringSlice) String() string {
+	return strings.Join(*ss, ",")
 }
 
-func (ss stringSet) Set(flag string) error {
+func (ss *stringSlice) Set(flag string) error {
 	for _, name := range strings.Split(flag, ",") {
 		if len(name) == 0 {
 			return errors.New("empty string")
 		}
-		ss[name] = true
+		*ss = append(*ss, name)
 	}
 	return nil
 }
