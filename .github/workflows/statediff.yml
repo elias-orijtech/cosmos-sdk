@@ -14,7 +14,7 @@ jobs:
   main:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
-      - run: |
-          curl -sL -H "Authorization: Bearer ${{ github.token }}" -H "Accept: application/vnd.github.v3.diff" \
-          "${{ github.server_url }}/${{ github.repository }}/pull/${{ github.event.pull_request.number }}.patch" | ./.github/workflows/statediff.sh
+      - name: "Run statediff"
+        uses: orijtech/statediff@main
+        with:
+          pull_request_url: "${{ github.server_url }}/${{ github.repository }}/pull/${{ github.event.pull_request.number }}.patch"
