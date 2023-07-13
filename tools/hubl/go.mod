@@ -5,7 +5,7 @@ go 1.20
 require (
 	cosmossdk.io/api v0.5.0
 	cosmossdk.io/client/v2 v2.0.0-20230705083123-9dcf8707780a
-	cosmossdk.io/errors v1.0.0-beta.7.0.20230524212735-6cabb6aa5741
+	cosmossdk.io/errors v1.0.0
 	github.com/cockroachdb/errors v1.10.0
 	github.com/cosmos/cosmos-sdk v0.50.0-alpha.0.0.20230630103340-0bbfc654a32e
 	github.com/manifoldco/promptui v0.9.0
