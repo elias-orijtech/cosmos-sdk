@@ -3,7 +3,7 @@ module cosmossdk.io/store
 go 1.20
 
 require (
-	cosmossdk.io/errors v1.0.0-beta.7
+	cosmossdk.io/errors v1.0.0
 	cosmossdk.io/log v1.1.0
 	cosmossdk.io/math v1.0.1
 	github.com/cometbft/cometbft v0.38.0-rc2
